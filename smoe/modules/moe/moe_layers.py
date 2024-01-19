@@ -30,7 +30,7 @@ class MoEMlpOutput(ModelOutput):
     num_dropped_tokens: Optional[int] = None
     gate_load: Optional[list] = None
     gate_importance: Optional[list] = None
-
+    expert_token_count: Optional[torch.IntTensor] = None
 
 class BaseMoELayer(nn.Module):
     def __init__(self):
@@ -143,6 +143,7 @@ class BaseMoELayer(nn.Module):
 
         # 计算被选出的专家及其分数，以及gate的loss
         gate_outputs: dict = self.gate(x)
+        
         # 合并各专家的计算结果
         calc_outs: CalculatorOutput = self.calculator(x, **gate_outputs)
         y = calc_outs.hidden_states
@@ -155,6 +156,7 @@ class BaseMoELayer(nn.Module):
             num_dropped_tokens=calc_outs.num_dropped_tokens,
             gate_load=gate_outputs.get("load", torch.tensor(-1)),
             gate_importance=gate_outputs.get("importance", torch.tensor(-1)),
+            expert_token_count = calc_outs.expert_token_count
         )
 
     # fmt: off

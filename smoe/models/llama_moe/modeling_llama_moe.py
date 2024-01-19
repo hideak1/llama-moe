@@ -141,6 +141,7 @@ class LlamaMoEDecoderLayer(LlamaDecoderLayer):
             outputs += (self_attn_weights,)
         if use_cache:
             outputs += (present_key_value,)
+        outputs += (mlp_outs.expert_token_count,)
 
         return outputs
 
@@ -207,6 +208,7 @@ class LlamaMoEModel(LlamaModel, LlamaMoEPreTrainedModel):
         self.layers = nn.ModuleList(
             [LlamaMoEDecoderLayer(config, i) for i in range(config.num_hidden_layers)]
         )
+        self.layer_expert_token_counter = [torch.zeros(config.num_experts, dtype=torch.long) for _ in range(config.num_hidden_layers)]
         self.post_init()
 
     def forward(
@@ -353,7 +355,13 @@ class LlamaMoEModel(LlamaModel, LlamaMoEPreTrainedModel):
             num_dropped_tokens += (layer_outputs[2],)
             gate_load += (layer_outputs[3],)
             gate_importance += (layer_outputs[4],)
-
+            if (output_attentions and use_cache and layer_outputs[7] is not None):
+                self.layer_expert_token_counter[idx] += layer_outputs[7].type(torch.LongTensor).detach()
+            elif (output_attentions or use_cache and layer_outputs[6] is not None):
+                self.layer_expert_token_counter[idx] += layer_outputs[6].type(torch.LongTensor).detach()
+            elif (not output_attentions and not use_cache and layer_outputs[5] is not None):
+                self.layer_expert_token_counter[idx] += layer_outputs[5].type(torch.LongTensor).detach()
+            print(f'layer {idx} expert to token map {self.layer_expert_token_counter[idx]}')
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer

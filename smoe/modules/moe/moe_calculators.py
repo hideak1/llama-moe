@@ -15,7 +15,7 @@ from smoe.utils.debugging import remote_breakpoint
 class CalculatorOutput(ModelOutput):
     hidden_states: Optional[torch.FloatTensor] = None
     num_dropped_tokens: Optional[int] = None
-
+    expert_token_count: Optional[torch.IntTensor] = None
 
 class BaseCalculator(nn.Module):
     def __init__(self):
@@ -83,6 +83,7 @@ class UniversalCalculator(BaseCalculator):
             # self.mlp_norm = WeightNorm(self.experts.out_features, scale=score_scale_factor)
             self.mlp_norm = WeightNorm(1, scale=score_scale_factor)
             self.mlp_norm.reset_parameters()
+        self.expert_token_statistic = torch.zeros(self.num_experts)
 
     def forward(
         self, x, topK_indices, topK_scores, expert_batch_size=None, **kwargs
@@ -114,7 +115,11 @@ class UniversalCalculator(BaseCalculator):
         """对每个专家重新组合batch"""
         sorted_x = x.index_select(0, sorted_batch_indices)  # 将输入按照排序后的batch编号，重新编制
         split_x = torch.split(sorted_x, expert_batch_size, dim=0)  # 按照排序后每个专家的batch_size进行分隔，恰好得到各个专家所需的batch
-
+        # split_x shape is list(tokens)
+        expert_token_count = torch.tensor([batch.size(0) for batch in split_x])
+        # print(f'current expert_token_count {expert_token_count}')
+        # self.expert_token_statistic += expert_token_count
+        # print(f'expert_token_statistic {self.expert_token_statistic}')
         """各专家分别正向传播"""  # 此处应该有并行优化的空间 (如果单次forward不足以占满显卡利用率)
         # args = [(split_x[i], i) for i in range(self.num_experts) if split_x[i].shape[0] > 0]
         # expert_outputs = self.experts_vmap(args)
@@ -135,7 +140,7 @@ class UniversalCalculator(BaseCalculator):
         zeros = torch.zeros((batch_size, output_dim), device=cat_expert_outputs.device, dtype=cat_expert_outputs.dtype)
         y = zeros.index_add(0, sorted_batch_indices, cat_expert_outputs)  # 按照对应的batch编号，添加输出
 
-        return CalculatorOutput(hidden_states=y, num_dropped_tokens=torch.tensor(-1.0))
+        return CalculatorOutput(hidden_states=y, num_dropped_tokens=torch.tensor(-1.0), expert_token_count = expert_token_count)
         # fmt: on
 
 
