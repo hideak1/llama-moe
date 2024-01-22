@@ -209,6 +209,8 @@ class LlamaMoEModel(LlamaModel, LlamaMoEPreTrainedModel):
             [LlamaMoEDecoderLayer(config, i) for i in range(config.num_hidden_layers)]
         )
         self.layer_expert_token_counter = [torch.zeros(config.num_experts, dtype=torch.long) for _ in range(config.num_hidden_layers)]
+        self.sequence_expert_token_recorder = []
+        self.counter = 0
         self.post_init()
 
     def forward(
@@ -308,6 +310,8 @@ class LlamaMoEModel(LlamaModel, LlamaMoEPreTrainedModel):
         num_dropped_tokens = ()
         gate_load = ()
         gate_importance = ()
+        self.sequence_expert_token_recorder.append([])
+        self.counter += 1
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -356,12 +360,18 @@ class LlamaMoEModel(LlamaModel, LlamaMoEPreTrainedModel):
             gate_load += (layer_outputs[3],)
             gate_importance += (layer_outputs[4],)
             if (output_attentions and use_cache and layer_outputs[7] is not None):
-                self.layer_expert_token_counter[idx] += layer_outputs[7].type(torch.LongTensor).detach()
+                expert_token = layer_outputs[7].type(torch.LongTensor).detach()
+                self.sequence_expert_token_recorder[-1].append(expert_token)
+                self.layer_expert_token_counter[idx] += expert_token
             elif (output_attentions or use_cache and layer_outputs[6] is not None):
-                self.layer_expert_token_counter[idx] += layer_outputs[6].type(torch.LongTensor).detach()
+                expert_token = layer_outputs[6].type(torch.LongTensor).detach()
+                self.sequence_expert_token_recorder[-1].append(expert_token)
+                self.layer_expert_token_counter[idx] += expert_token
             elif (not output_attentions and not use_cache and layer_outputs[5] is not None):
-                self.layer_expert_token_counter[idx] += layer_outputs[5].type(torch.LongTensor).detach()
-            print(f'layer {idx} expert to token map {self.layer_expert_token_counter[idx]}')
+                expert_token = layer_outputs[5].type(torch.LongTensor).detach()
+                self.sequence_expert_token_recorder[-1].append(expert_token)
+                self.layer_expert_token_counter[idx] += expert_token
+            # print(f'layer {idx} expert to token map {self.layer_expert_token_counter[idx]}')
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
@@ -510,7 +520,12 @@ class LlamaMoEModel(LlamaModel, LlamaMoEPreTrainedModel):
     def reset_experts(self):
         for idx, decoder_layer in enumerate(self.layers):
             decoder_layer.reset_experts()
-
+    
+    def persist_data(self):
+        print('persist layer_expert_token_counter to layer_expert_token_counter.pt file')
+        torch.save(self.layer_expert_token_counter, 'layer_expert_token_counter.pt')
+        print('persist sequence_expert_token_recorder to sequence_expert_token_recorder.pt file')
+        torch.save(self.sequence_expert_token_recorder, 'sequence_expert_token_recorder.pt')
 
 class LlamaMoEForCausalLM(LlamaForCausalLM, LlamaMoEPreTrainedModel):
     def __init__(self, config):
@@ -637,6 +652,9 @@ class LlamaMoEForCausalLM(LlamaForCausalLM, LlamaMoEPreTrainedModel):
 
     def reset_experts(self):
         self.model.reset_experts()
+
+    def callback(self):
+        self.model.persist_data()
 
 
 class LlamaMoEForSequenceClassification(
